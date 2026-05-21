@@ -202,3 +202,169 @@ class KneesensSimulator:
         )
 
         return df
+
+    def simulate_normal_walking(self) -> pd.DataFrame:
+        """Generate the Normal Walking scenario."""
+        time_s = self._create_time_vector(self.config.walking_duration_s)
+        clean_signal = self._simulate_walking_waveform(time_s)
+        noisy_signal = self._add_sensor_noise(clean_signal)
+        state = np.full(time_s.shape, "walking", dtype=object)
+        return self._build_dataframe("Normal Walking", state, time_s, noisy_signal)
+
+    def simulate_sudden_fall(self) -> pd.DataFrame:
+        """Generate the Sudden Fall scenario."""
+        time_s = self._create_time_vector(self.config.fall_duration_s)
+        clean_signal, state = self._simulate_sudden_fall(time_s)
+        noisy_signal = self._add_sensor_noise(clean_signal)
+        return self._build_dataframe("Sudden Fall", state, time_s, noisy_signal)
+
+    def generate_dataset(self) -> pd.DataFrame:
+        """Generate the full labeled dataset containing both scenarios."""
+        walking_df = self.simulate_normal_walking()
+        fall_df = self.simulate_sudden_fall()
+        dataset = pd.concat([walking_df, fall_df], axis=0, ignore_index=True)
+        return dataset
+
+    def export_to_csv(self, df: pd.DataFrame, output_path: Optional[str] = None) -> Path:
+        """Export the generated dataset to CSV."""
+        csv_path = Path(output_path or self.config.output_csv)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(csv_path, index=False)
+        logging.info("Dataset exported to %s", csv_path.resolve())
+        return csv_path
+
+    def plot(self, df: pd.DataFrame) -> None:
+        """Plot X, Y, Z acceleration over time for each scenario."""
+        scenarios = ["Normal Walking", "Sudden Fall"]
+        fig, axes = plt.subplots(
+            nrows=2,
+            ncols=1,
+            figsize=(12, 8),
+            sharex=False,
+            constrained_layout=True,
+        )
+
+        for axis, scenario in zip(axes, scenarios):
+            scenario_df = df[df["Scenario"] == scenario]
+
+            axis.plot(scenario_df["Time_s"], scenario_df["Accel_X_g"], label="Accel_X_g")
+            axis.plot(scenario_df["Time_s"], scenario_df["Accel_Y_g"], label="Accel_Y_g")
+            axis.plot(scenario_df["Time_s"], scenario_df["Accel_Z_g"], label="Accel_Z_g")
+
+            if scenario == "Sudden Fall":
+                axis.axvline(
+                    self.config.fall_time_s,
+                    linestyle="--",
+                    linewidth=1.5,
+                    label="Estimated impact time",
+                )
+
+            axis.set_title(scenario)
+            axis.set_xlabel("Time (s)")
+            axis.set_ylabel("Acceleration (g)")
+            axis.grid(True, alpha=0.3)
+            axis.legend(loc="upper right")
+
+        plt.show()
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for reproducible simulation runs."""
+    parser = argparse.ArgumentParser(
+        description="Simulate raw 3-axis accelerometer data for the Kneesens wearable."
+    )
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="Display matplotlib plots after generating the dataset.",
+    )
+    parser.add_argument(
+        "--sampling-rate-hz",
+        type=int,
+        default=100,
+        help="Sampling rate in Hz.",
+    )
+    parser.add_argument(
+        "--walking-duration-s",
+        type=float,
+        default=12.0,
+        help="Duration of the Normal Walking scenario in seconds.",
+    )
+    parser.add_argument(
+        "--fall-duration-s",
+        type=float,
+        default=12.0,
+        help="Duration of the Sudden Fall scenario in seconds.",
+    )
+    parser.add_argument(
+        "--gait-frequency-hz",
+        type=float,
+        default=1.8,
+        help="Dominant gait frequency in Hz.",
+    )
+    parser.add_argument(
+        "--noise-std-g",
+        type=float,
+        default=0.03,
+        help="Standard deviation of Gaussian sensor noise in g.",
+    )
+    parser.add_argument(
+        "--fall-time-s",
+        type=float,
+        default=6.0,
+        help="Time point at which the fall impact occurs in the fall scenario.",
+    )
+    parser.add_argument(
+        "--impact-duration-s",
+        type=float,
+        default=0.12,
+        help="Approximate duration of the impact pulse in seconds.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for deterministic simulation.",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="kneesens_fallback_data.csv",
+        help="Output CSV file path.",
+    )
+    return parser.parse_args()
+
+
+def build_config_from_args(args: argparse.Namespace) -> SimulationConfig:
+    """Build a validated SimulationConfig from CLI arguments."""
+    return SimulationConfig(
+        sampling_rate_hz=args.sampling_rate_hz,
+        walking_duration_s=args.walking_duration_s,
+        fall_duration_s=args.fall_duration_s,
+        gait_frequency_hz=args.gait_frequency_hz,
+        noise_std_g=args.noise_std_g,
+        fall_time_s=args.fall_time_s,
+        impact_duration_s=args.impact_duration_s,
+        random_seed=args.seed,
+        output_csv=args.output,
+    )
+
+
+def main() -> None:
+    """Entry point for script execution."""
+    args = parse_args()
+    config = build_config_from_args(args)
+
+    simulator = KneesensSimulator(config)
+    dataset = simulator.generate_dataset()
+    simulator.export_to_csv(dataset)
+
+    logging.info("Generated %d samples across %d scenarios.", len(dataset), dataset["Scenario"].nunique())
+    logging.info("Columns: %s", ", ".join(dataset.columns))
+
+    if args.plot:
+        simulator.plot(dataset)
+
+
+if __name__ == "__main__":
+    main()
